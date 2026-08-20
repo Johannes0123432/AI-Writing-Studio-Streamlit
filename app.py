@@ -34,6 +34,7 @@ from utils.quality import (
     compute_metrics,
     build_humanize_prompt,
     build_draft_system_prompt,
+    adaptive_humanize,
 )
 from utils.payments import (
     PLANS,
@@ -673,22 +674,32 @@ if st.session_state.draft:
     )
     st.session_state.draft = draft_text
 
-    # Metrics + actual word cost
+    # Metrics + actual word cost + adaptive naturalness score
     metrics = compute_metrics(draft_text)
     st.session_state.metrics = metrics
     actual_words = metrics.get("word_count", 0)
     actual_blocks = max(1, (actual_words + 99) // 100) if actual_words > 0 else 0
     actual_cost = actual_blocks * 9
+    naturalness = metrics.get("naturalness_score", 0)
 
-    mcols = st.columns(7)
+    mcols = st.columns(8)
     mcols[0].metric("Words", actual_words)
     mcols[1].metric("Sentences", metrics.get("sentence_count", 0))
     mcols[2].metric("Avg sent. len", metrics.get("avg_sentence_length", 0))
     mcols[3].metric("Sent. len std", metrics.get("sentence_length_std", 0),
-                    help="Higher usually means more natural rhythm variation")
+                    help="Higher = more natural rhythm variation (burstiness)")
     mcols[4].metric("Unique word ratio", metrics.get("unique_word_ratio", 0))
     mcols[5].metric("AI-phrase hits", metrics.get("ai_tell_phrase_count", 0))
-    mcols[6].metric("Est. cost", f"${actual_cost}" if "Test" in selected_plan or "Pay-as-you-go" in selected_plan else "Included")
+    mcols[6].metric("Naturalness", f"{naturalness}/100",
+                    help="Local adaptive score (higher = more consistent human-like prose). Not a commercial AI detector.")
+    mcols[7].metric("Est. cost", f"${actual_cost}" if "Test" in selected_plan or "Pay-as-you-go" in selected_plan else "Included")
+
+    if naturalness >= 75:
+        st.success(f"Local naturalness score: {naturalness}/100 — prose looks consistently human-like by internal metrics.")
+    elif naturalness >= 55:
+        st.info(f"Local naturalness score: {naturalness}/100 — acceptable, but Adaptive Polish can improve consistency.")
+    else:
+        st.warning(f"Local naturalness score: {naturalness}/100 — recommend running Adaptive Humanize for better integrity of voice.")
 
     if actual_words > 0 and actual_words <= 100:
         st.success(f"This draft is {actual_words} words — perfect for the $9 test block.")
@@ -713,28 +724,38 @@ if st.session_state.draft:
                 st.rerun()
 
     with b2:
-        if st.button("Polish for Naturalness", use_container_width=True):
+        if st.button("Adaptive Humanize", use_container_width=True,
+                     help="Multi-pass polish that adapts using the local naturalness score for consistent human-like prose"):
             if not api_key.strip():
                 st.error("API key required for polishing.")
             else:
-                with st.spinner("Polishing rhythm and naturalness…"):
+                with st.spinner("Running adaptive humanizer (up to 3 passes)…"):
                     try:
-                        humanize_prompt = build_humanize_prompt(draft_text, full_style)
-                        polished = generate_text(
-                            provider=provider,
-                            api_key=api_key,
-                            model=model,
-                            system_prompt="You are a careful developmental editor focused on natural prose.",
-                            user_prompt=humanize_prompt,
-                            temperature=0.65,
-                            max_tokens=max_tokens,
+                        def _gen(system: str, user: str) -> str:
+                            return generate_text(
+                                provider=provider,
+                                api_key=api_key,
+                                model=model,
+                                system_prompt=system,
+                                user_prompt=user,
+                                temperature=0.65,
+                                max_tokens=max_tokens,
+                            )
+
+                        polished, history = adaptive_humanize(
+                            text=draft_text,
+                            generate_fn=_gen,
+                            style_notes=full_style,
+                            target_score=75,
+                            max_passes=3,
                         )
                         st.session_state.humanized = polished
                         st.session_state.draft = polished
                         st.session_state.metrics = compute_metrics(polished)
+                        st.session_state.humanize_history = history
                         st.rerun()
                     except Exception as e:
-                        st.error(f"Polish failed: {e}")
+                        st.error(f"Adaptive humanize failed: {e}")
 
     with b3:
         if st.button("Show raw text", use_container_width=True):
@@ -757,6 +778,11 @@ if st.session_state.draft:
                     st.caption("Suggestions: " + ", ".join(issue["replacements"]))
             if len(st.session_state.grammar_issues) > 30:
                 st.caption("… and more")
+
+    if st.session_state.get("humanize_history"):
+        with st.expander("Adaptive Humanize history (local naturalness scores)"):
+            for step in st.session_state.humanize_history:
+                st.write(f"Pass {step.get('pass')}: score **{step.get('score')}/100**")
 
     st.info(
         "Always fact-check any numbers or claims and perform a human edit pass. "
