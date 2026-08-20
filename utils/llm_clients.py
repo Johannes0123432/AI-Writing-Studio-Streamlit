@@ -32,28 +32,31 @@ def get_openai_compatible_client(api_key: str, base_url: str) -> "OpenAI":
 
 
 def list_models(provider: str, api_key: str) -> list[str]:
-    """Return a sensible default list of models for the provider."""
+    """Return a sensible default list of current models for the provider (as of Aug 2026)."""
     if provider == "Gemini":
         return [
-            "gemini-2.0-flash",
-            "gemini-1.5-pro",
-            "gemini-1.5-flash",
-            "gemini-2.0-flash-lite",
+            "gemini-3.7-flash",      # Latest (Aug 2026)
+            "gemini-3.6-flash",
+            "gemini-3.5-flash-lite",
+            "gemini-3.5-flash",
+            "gemini-3.1-pro-preview",
         ]
     elif provider == "Grok":
         return [
+            "grok-4.6",              # Latest flagship (Aug 2026)
+            "grok-4.5",
+            "grok-4",
             "grok-3",
-            "grok-3-mini",
-            "grok-2",
-            "grok-2-mini",
         ]
     elif provider == "OpenRouter":
         return [
-            "google/gemini-2.0-flash-001",
-            "anthropic/claude-3.5-sonnet",
-            "openai/gpt-4o",
-            "meta-llama/llama-3.1-70b-instruct",
-            "x-ai/grok-beta",
+            "google/gemini-3.7-flash",
+            "google/gemini-3.6-flash",
+            "x-ai/grok-4.6",
+            "x-ai/grok-4.5",
+            "anthropic/claude-sonnet-4",
+            "openai/gpt-5",
+            "meta-llama/llama-4-70b",
             "mistralai/mistral-large",
         ]
     return []
