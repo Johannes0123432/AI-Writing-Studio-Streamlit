@@ -38,10 +38,8 @@ from utils.quality import (
 )
 from utils.payments import (
     PLANS,
-    create_stripe_checkout_session,
     create_paypal_order,
-    verify_stripe_session,
-    is_payments_configured,
+    get_payoneer_payment_link,
 )
 
 # ---------------------------------------------------------------------------
@@ -61,7 +59,7 @@ st.set_page_config(
 def handle_payment_return():
     """
     Called once at the start of each run.
-    When Stripe redirects back with ?session_id=cs_… we verify (stub for now)
+    When a payment provider redirects back we can activate the plan (stub for now)
     and set st.session_state flags so the rest of the app knows the user paid.
     """
     # Initialise flags if missing
@@ -85,8 +83,8 @@ def handle_payment_return():
         st.session_state.last_handled_session_id = None
 
     if session_id and session_id != st.session_state.last_handled_session_id:
-        # Call the verification stub (will become real Stripe call later)
-        result = verify_stripe_session(session_id)
+        # Payment return detected – activate plan manually or via future webhook
+        result = {"paid": False, "plan_id": None}
 
         if result.get("paid"):
             # Real implementation will know the plan from the session metadata
@@ -102,7 +100,7 @@ def handle_payment_return():
             # Stub currently always returns paid=False – show informative message
             st.session_state.payment_message = (
                 "Payment return detected (session_id present). "
-                "Stripe verification is still a stub – connect your keys in "
+                "Payment verification is still a stub – configure Payoneer / PayPal links in "
                 "utils/payments.py to activate plans automatically."
             )
 
@@ -118,7 +116,7 @@ def handle_payment_return():
     elif payment_status == "success" and not session_id:
         st.session_state.payment_message = (
             "Payment success flag received. "
-            "Add full Stripe session verification for production use."
+            "Configure real Payoneer or PayPal links for production use."
         )
         try:
             st.query_params.clear()
@@ -200,27 +198,19 @@ with price_col1:
     # Payment buttons for pay-as-you-go
     pg1, pg2 = st.columns(2)
     with pg1:
-        if st.button("Pay $9 with Stripe", key="stripe_payg", use_container_width=True):
-            result = create_stripe_checkout_session(
-                plan_id="payg_100",
-                success_url="https://your-app-url.streamlit.app/?session_id={CHECKOUT_SESSION_ID}",
-                cancel_url="https://your-app-url.streamlit.app/?payment=cancelled",
-            )
+        if st.button("Pay $9 with Payoneer", key="payoneer_payg", use_container_width=True):
+            result = get_payoneer_payment_link(plan_id="payg_100")
             if result.get("url"):
-                st.link_button("Continue to Stripe Checkout", result["url"])
+                st.link_button("Continue to Payoneer", result["url"])
             else:
-                st.warning(result.get("message", "Stripe not yet connected."))
+                st.warning(result.get("message", "Payoneer payment link not set yet."))
     with pg2:
         if st.button("Pay $9 with PayPal", key="paypal_payg", use_container_width=True):
-            result = create_paypal_order(
-                plan_id="payg_100",
-                return_url="https://your-app-url.streamlit.app/?payment=success",
-                cancel_url="https://your-app-url.streamlit.app/?payment=cancelled",
-            )
+            result = create_paypal_order(plan_id="payg_100")
             if result.get("approve_url"):
                 st.link_button("Continue to PayPal", result["approve_url"])
             else:
-                st.warning(result.get("message", "PayPal not yet connected."))
+                st.warning(result.get("message", "PayPal link not set yet."))
 
 with price_col2:
     st.markdown(
@@ -239,27 +229,19 @@ with price_col2:
     # Payment buttons for monthly
     m1, m2 = st.columns(2)
     with m1:
-        if st.button("Subscribe $75 / mo – Stripe", key="stripe_monthly", use_container_width=True):
-            result = create_stripe_checkout_session(
-                plan_id="monthly_75",
-                success_url="https://your-app-url.streamlit.app/?session_id={CHECKOUT_SESSION_ID}",
-                cancel_url="https://your-app-url.streamlit.app/?payment=cancelled",
-            )
+        if st.button("Subscribe $75 / mo – Payoneer", key="payoneer_monthly", use_container_width=True):
+            result = get_payoneer_payment_link(plan_id="monthly_75")
             if result.get("url"):
-                st.link_button("Continue to Stripe Checkout", result["url"])
+                st.link_button("Continue to Payoneer", result["url"])
             else:
-                st.warning(result.get("message", "Stripe not yet connected."))
+                st.warning(result.get("message", "Payoneer payment link not set yet."))
     with m2:
         if st.button("Subscribe $75 / mo – PayPal", key="paypal_monthly", use_container_width=True):
-            result = create_paypal_order(
-                plan_id="monthly_75",
-                return_url="https://your-app-url.streamlit.app/?payment=success",
-                cancel_url="https://your-app-url.streamlit.app/?payment=cancelled",
-            )
+            result = create_paypal_order(plan_id="monthly_75")
             if result.get("approve_url"):
                 st.link_button("Continue to PayPal", result["approve_url"])
             else:
-                st.warning(result.get("message", "PayPal not yet connected."))
+                st.warning(result.get("message", "PayPal link not set yet."))
 
 st.markdown(
     """
@@ -272,42 +254,6 @@ You can cancel your monthly subscription at any time. After cancellation you ret
 3. After payment (or while testing locally) enter your LLM API key in the sidebar and start writing.
 """
 )
-
-# Owner note about connecting real payments
-with st.expander("For the app owner – how to connect Stripe & PayPal", expanded=False):
-    st.markdown(
-        """
-**Current status**: Payment buttons are in place and call stub functions in `utils/payments.py`.  
-They will show a “not yet connected” message until you add real keys.
-
-### Stripe (recommended first)
-1. Create account at https://dashboard.stripe.com  
-2. Create a Product + recurring Price for the $75/month plan (copy the `price_…` ID).  
-3. Get your **Secret key** and **Publishable key**.  
-4. In Streamlit Cloud → App settings → Secrets, add:
-   ```toml
-   STRIPE_SECRET_KEY = "sk_live_…"
-   STRIPE_PUBLISHABLE_KEY = "pk_live_…"
-   ```
-5. Open `utils/payments.py` and replace the TODO sections in  
-   `create_stripe_checkout_session` and `verify_stripe_session` with real `stripe` library calls.  
-6. Change the success/cancel URLs in the buttons above to your real app URL.  
-7. (Optional but recommended) Add a Stripe webhook endpoint to reliably record successful payments.
-
-### PayPal
-1. Create a Business / Developer account at https://developer.paypal.com  
-2. Create an app and obtain Client ID + Secret.  
-3. Add them to Streamlit secrets.  
-4. Implement the TODO in `create_paypal_order`.
-
-### After payment succeeds
-- Verify the session (Stripe) or capture the order (PayPal).  
-- Set `st.session_state["plan"] = "monthly"` or add word credits.  
-- Optionally store the customer/subscription ID in a small database (Supabase, Firebase, or even a simple JSON/SQLite file).
-
-Once the stubs are replaced with real API calls, the existing buttons will start working without further UI changes.
-"""
-    )
 
 st.divider()
 
@@ -329,7 +275,7 @@ with st.sidebar:
         "Select plan (demo selector)",
         ["Test / Pay-as-you-go ($9 per 100 words)", "Monthly Subscription ($75)"],
         index=0,
-        help="In a production version this is set automatically after Stripe/PayPal payment.",
+        help="In a production version this is set after Payoneer or PayPal payment.",
     )
 
     if "Test" in selected_plan:
@@ -694,9 +640,9 @@ if st.session_state.draft:
                     help="Local adaptive score (higher = more consistent human-like prose). Not a commercial AI detector.")
     mcols[7].metric("Est. cost", f"${actual_cost}" if "Test" in selected_plan or "Pay-as-you-go" in selected_plan else "Included")
 
-    if naturalness >= 75:
+    if naturalness >= 80:
         st.success(f"Local naturalness score: {naturalness}/100 — prose looks consistently human-like by internal metrics.")
-    elif naturalness >= 55:
+    elif naturalness >= 60:
         st.info(f"Local naturalness score: {naturalness}/100 — acceptable, but Adaptive Polish can improve consistency.")
     else:
         st.warning(f"Local naturalness score: {naturalness}/100 — recommend running Adaptive Humanize for better integrity of voice.")
@@ -746,8 +692,8 @@ if st.session_state.draft:
                             text=draft_text,
                             generate_fn=_gen,
                             style_notes=full_style,
-                            target_score=75,
-                            max_passes=3,
+                            target_score=80,
+                            max_passes=4,
                         )
                         st.session_state.humanized = polished
                         st.session_state.draft = polished
