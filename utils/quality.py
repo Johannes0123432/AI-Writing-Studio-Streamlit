@@ -149,59 +149,66 @@ def _compute_naturalness_score(
     flesch: Optional[float],
 ) -> int:
     """
-    Local heuristic that rewards:
-    - Sentence-length variation (burstiness)
-    - Reasonable average sentence length
-    - Lexical diversity
-    - Few formulaic AI-tell phrases
-    - Readable but not overly simplistic prose
+    Stricter local heuristic for writing quality and consistency.
+    Higher score = more natural, varied, human-like prose by internal metrics.
+    This is NOT a commercial AI detector and does not match GPTZero/Originality etc.
     """
-    score = 55.0  # baseline
+    score = 48.0  # lower, stricter baseline
 
-    # Burstiness / sentence length variation (very important for natural rhythm)
-    if std_dev >= 8:
-        score += 18
-    elif std_dev >= 5:
-        score += 12
+    # Burstiness is heavily weighted (uniform length is a strong machine signal)
+    if std_dev >= 10:
+        score += 22
+    elif std_dev >= 7:
+        score += 15
+    elif std_dev >= 4.5:
+        score += 8
     elif std_dev >= 3:
-        score += 6
+        score += 2
     else:
-        score -= 8
+        score -= 14  # strong penalty for low variation
 
-    # Average sentence length (human writing usually 12–22 words)
-    if 12 <= avg_sent_len <= 22:
-        score += 10
-    elif 8 <= avg_sent_len <= 28:
-        score += 4
+    # Human-typical average sentence length
+    if 13 <= avg_sent_len <= 20:
+        score += 12
+    elif 10 <= avg_sent_len <= 24:
+        score += 6
+    elif avg_sent_len < 8 or avg_sent_len > 30:
+        score -= 10
     else:
-        score -= 6
+        score -= 3
 
     # Lexical diversity
-    if unique_ratio >= 0.55:
-        score += 10
-    elif unique_ratio >= 0.42:
-        score += 5
+    if unique_ratio >= 0.58:
+        score += 12
+    elif unique_ratio >= 0.48:
+        score += 6
+    elif unique_ratio >= 0.38:
+        score += 1
     else:
-        score -= 5
+        score -= 9
 
-    # Penalize formulaic phrases (scaled by length)
+    # Formulaic / AI-tell density – stricter penalties
     if word_count > 0:
-        density = ai_tell_count / (word_count / 100)
+        density = ai_tell_count / max(word_count / 100.0, 0.01)
         if density == 0:
-            score += 8
-        elif density < 0.5:
-            score += 3
-        elif density > 2:
-            score -= 15
-        else:
-            score -= 7
-
-    # Mild readability preference
-    if flesch is not None:
-        if 50 <= flesch <= 70:
-            score += 5
-        elif flesch < 30 or flesch > 90:
+            score += 10
+        elif density < 0.3:
+            score += 4
+        elif density < 0.8:
             score -= 4
+        elif density < 1.5:
+            score -= 12
+        else:
+            score -= 20
+
+    # Readability – prefer natural range, penalize extremes
+    if flesch is not None:
+        if 55 <= flesch <= 70:
+            score += 6
+        elif 45 <= flesch <= 75:
+            score += 2
+        elif flesch < 25 or flesch > 90:
+            score -= 7
 
     return max(0, min(100, int(round(score))))
 
@@ -210,7 +217,7 @@ def build_humanize_prompt(
     original: str,
     style_notes: str = "",
     previous_score: Optional[int] = None,
-    target_score: int = 75,
+    target_score: int = 80,
 ) -> str:
     """
     Adaptive prompt focused on naturalness, rhythm, voice consistency,
@@ -220,9 +227,13 @@ def build_humanize_prompt(
     if previous_score is not None:
         if previous_score < target_score:
             feedback = (
-                f"\nThe previous version scored only {previous_score}/100 on local naturalness metrics. "
-                "Increase sentence-length variation, reduce repetitive and formulaic phrasing, "
-                "and make the rhythm feel more human and less uniform.\n"
+                f"\nThe previous version scored only {previous_score}/100 on local naturalness metrics (target {target_score}). "
+                "This is below the quality threshold. You must:\n"
+                "- Strongly increase sentence-length variation (mix very short and longer sentences)\n"
+                "- Remove or rewrite all formulaic and stock phrases\n"
+                "- Break uniform rhythm and repetitive structures\n"
+                "- Prefer concrete, specific language over abstract filler\n"
+                "Keep every fact, number, and meaning exactly the same.\n"
             )
         else:
             feedback = (
@@ -250,8 +261,8 @@ def adaptive_humanize(
     text: str,
     generate_fn: Callable[[str, str], str],
     style_notes: str = "",
-    target_score: int = 75,
-    max_passes: int = 3,
+    target_score: int = 80,
+    max_passes: int = 4,
 ) -> Tuple[str, List[Dict]]:
     """
     Adaptive multi-pass humanizer.
